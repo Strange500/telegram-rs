@@ -1,0 +1,79 @@
+:root {
+  --bg-base: #0f111a;
+  --bg-surface: #1a1d2d;
+  --bg-card: rgba(26, 29, 45, 0.7);
+  
+  --text-main: #f8f9fa;
+  --text-muted: #8b949e;
+  
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --accent-glow: rgba(99, 102, 241, 0.4);
+  
+  --border: rgba(255, 255, 255, 0.1);
+  --radius: 12px;
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--bg-base);
+  color: var(--text-main);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Glassmorphism helpers */
+.glass-panel {
+  background: var(--bg-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* Base button */
+button {
+  font-family: inherit;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  box-shadow: 0 0 15px var(--accent-glow);
+}
+
+button:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 0 25px var(--accent-glow);
+}
+
+/* Base input */
+input {
+  font-family: inherit;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+input:focus {
+  border-color: var(--accent);
+}

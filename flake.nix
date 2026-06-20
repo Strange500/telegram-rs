@@ -17,6 +17,7 @@
           rustc
           rustfmt
           rustPackages.clippy
+          nodejs_22
         ];
       };
     };
