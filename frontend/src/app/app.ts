@@ -301,14 +301,26 @@ export class AppComponent {
   private connectWs() {
     this.ws = new WebSocket('ws://localhost:3000/ws');
     this.ws.onmessage = async (event) => {
-      for (const contact of this.contacts()) {
-        try {
-          const decrypted = await this.decrypt(event.data, contact.sharedKey);
+      try {
+        const msg = JSON.parse(event.data);
+        
+        // ponytail: prevent the "double message" bug by ignoring our own echoes
+        if (msg.sender === this.myPublicKeyBase64) return;
+        
+        // Check if the message is actually meant for us
+        if (msg.receiver !== this.myPublicKeyBase64) return;
+
+        const contact = this.contacts().find(c => c.pubKey === msg.sender);
+        if (contact) {
+          const decrypted = await this.decrypt(msg.payload, contact.sharedKey);
           if (decrypted) {
             this.addMessageToState(contact.pubKey, decrypted, false);
-            return;
           }
-        } catch (e) {}
+        } else {
+          console.warn("Received message from unknown contact:", msg.sender);
+        }
+      } catch (e) {
+        // Not a JSON message or decryption failed
       }
     };
   }
@@ -326,7 +338,14 @@ export class AppComponent {
     this.addMessageToState(active, text, true);
     
     const encrypted = await this.encrypt(text, contact.sharedKey);
-    this.ws.send(encrypted);
+    
+    // Send with an envelope so the server/clients know who it's routing to/from
+    const envelope = {
+      sender: this.myPublicKeyBase64,
+      receiver: active,
+      payload: encrypted
+    };
+    this.ws.send(JSON.stringify(envelope));
   }
 
   private addMessageToState(contactPubKey: string, text: string, isSelf: boolean) {
