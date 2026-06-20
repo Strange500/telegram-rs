@@ -1,0 +1,9 @@
+# Cargo
+/backend/target/
+**/*.rs.bk
+
+# Env
+.env
+
+# Nix
+result

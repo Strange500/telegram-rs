@@ -1,0 +1,9 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros"] }
