@@ -67,6 +67,17 @@ async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    // ponytail: send entire history on connect. no REST endpoints, no CORS needed.
+    let records: Result<Vec<(String,)>, _> = sqlx::query_as("SELECT encrypted_payload FROM messages ORDER BY id ASC")
+        .fetch_all(&state.pool)
+        .await;
+        
+    if let Ok(rows) = records {
+        for (payload,) in rows {
+            let _ = socket.send(Message::Text(payload.into())).await;
+        }
+    }
+
     let mut rx = state.tx.subscribe();
     
     // ponytail: simple select loop to handle send/recv concurrently
@@ -81,8 +92,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
             msg = socket.recv() => {
                 if let Some(Ok(Message::Text(text))) = msg {
-                    // ponytail: save and broadcast. parsing out sender/receiver from payload is 
-                    // skipped here to stay minimal (assuming payload is self-contained JSON).
                     let _ = sqlx::query("INSERT INTO messages (sender_pubkey, receiver_pubkey, encrypted_payload) VALUES ('ext_parsed', 'ext_parsed', $1)")
                         .bind(text.as_str())
                         .execute(&state.pool)
