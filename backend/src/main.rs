@@ -3,8 +3,16 @@ use axum::{
     routing::get,
     Router,
 };
+use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use tokio::sync::broadcast;
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Envelope {
+    sender: String,
+    receiver: String,
+    payload: String,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -68,13 +76,16 @@ async fn ws_handler(
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     // ponytail: send entire history on connect. no REST endpoints, no CORS needed.
-    let records: Result<Vec<(String,)>, _> = sqlx::query_as("SELECT encrypted_payload FROM messages ORDER BY id ASC")
+    let records: Result<Vec<(String, String, String)>, _> = sqlx::query_as("SELECT sender_pubkey, receiver_pubkey, encrypted_payload FROM messages ORDER BY id ASC")
         .fetch_all(&state.pool)
         .await;
         
     if let Ok(rows) = records {
-        for (payload,) in rows {
-            let _ = socket.send(Message::Text(payload.into())).await;
+        for (sender, receiver, payload) in rows {
+            let env = Envelope { sender, receiver, payload };
+            if let Ok(json) = serde_json::to_string(&env) {
+                let _ = socket.send(Message::Text(json.into())).await;
+            }
         }
     }
 
@@ -92,12 +103,16 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
             msg = socket.recv() => {
                 if let Some(Ok(Message::Text(text))) = msg {
-                    let _ = sqlx::query("INSERT INTO messages (sender_pubkey, receiver_pubkey, encrypted_payload) VALUES ('ext_parsed', 'ext_parsed', $1)")
-                        .bind(text.as_str())
-                        .execute(&state.pool)
-                        .await;
-                    
-                    let _ = state.tx.send(text.to_string());
+                    if let Ok(env) = serde_json::from_str::<Envelope>(&text) {
+                        let _ = sqlx::query("INSERT INTO messages (sender_pubkey, receiver_pubkey, encrypted_payload) VALUES ($1, $2, $3)")
+                            .bind(&env.sender)
+                            .bind(&env.receiver)
+                            .bind(&env.payload)
+                            .execute(&state.pool)
+                            .await;
+                        
+                        let _ = state.tx.send(text.to_string());
+                    }
                 } else {
                     break;
                 }
