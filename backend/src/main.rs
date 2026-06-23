@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use tokio::sync::broadcast;
 use p256::{SecretKey, PublicKey, EncodedPoint};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use rand_core::{OsRng, RngCore};
+use p256::elliptic_curve::sec1::{ToEncodedPoint, FromEncodedPoint};
+use rand::{rngs::OsRng, RngCore};
 use base64::prelude::*;
 use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 
@@ -116,7 +116,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         Ok(p) => p,
         Err(_) => return,
     };
-    let client_pub_affine = match PublicKey::from_encoded_point(&client_pub_point) {
+    let client_pub_opt: Option<PublicKey> = PublicKey::from_encoded_point(&client_pub_point).into();
+    let client_pub_affine = match client_pub_opt {
         Some(p) => p,
         None => return,
     };
