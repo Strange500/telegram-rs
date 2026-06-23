@@ -37,7 +37,7 @@ export class CryptoService {
   async encrypt(data: string | Uint8Array, key: CryptoKey): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const buffer = typeof data === 'string' ? new TextEncoder().encode(data) : data;
-    const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer);
+    const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer as BufferSource);
     const combined = new Uint8Array(iv.length + cipher.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(cipher), iv.length);
