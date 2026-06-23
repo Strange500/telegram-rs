@@ -34,10 +34,10 @@ export class CryptoService {
     );
   }
 
-  async encrypt(text: string, key: CryptoKey): Promise<string> {
+  async encrypt(data: string | Uint8Array, key: CryptoKey): Promise<string> {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const enc = new TextEncoder();
-    const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
+    const buffer = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buffer);
     const combined = new Uint8Array(iv.length + cipher.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(cipher), iv.length);
@@ -54,14 +54,14 @@ export class CryptoService {
     } catch { return null; }
   }
 
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
+  arrayBufferToBase64(buffer: ArrayBuffer): string {
     let binary = '';
     const bytes = new Uint8Array(buffer);
     for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
     return btoa(binary);
   }
 
-  private base64ToArrayBuffer(base64: string): ArrayBuffer {
+  base64ToArrayBuffer(base64: string): ArrayBuffer {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

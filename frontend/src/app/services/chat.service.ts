@@ -111,9 +111,24 @@ export class ChatService {
 
   private connectWs() {
     this.ws = new WebSocket('ws://localhost:3000/ws');
+    
+    this.ws.onopen = () => {
+      this.ws?.send(JSON.stringify({ type: 'auth_init', pubkey: this.myPublicKeyBase64() }));
+    };
+
     this.ws.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
+        
+        if (msg.type === 'auth_challenge') {
+          if (!this.myKeyPair) return;
+          const sharedKey = await this.crypto.deriveSharedKey(msg.ephemeral_pubkey, this.myKeyPair.privateKey);
+          const challengeRaw = new Uint8Array(this.crypto.base64ToArrayBuffer(msg.challenge));
+          const encrypted = await this.crypto.encrypt(challengeRaw, sharedKey);
+          this.ws?.send(JSON.stringify({ type: 'auth_verify', encrypted_challenge: encrypted }));
+          return;
+        }
+
         if (msg.type === 'pseudo') {
           this.pseudos.update(p => ({ ...p, [msg.pubkey]: msg.pseudo }));
           return;

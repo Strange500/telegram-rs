@@ -6,9 +6,16 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, Pool, Postgres};
 use tokio::sync::broadcast;
+use p256::{SecretKey, PublicKey, EncodedPoint};
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use rand_core::{OsRng, RngCore};
+use base64::prelude::*;
+use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Envelope {
+    #[serde(default)]
+    r#type: Option<String>,
     sender: String,
     receiver: String,
     payload: String,
@@ -85,6 +92,78 @@ async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    let mut client_pubkey_str = String::new();
+
+    // 1. Wait for auth_init
+    if let Some(Ok(Message::Text(text))) = socket.recv().await {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if value.get("type").and_then(|v| v.as_str()) == Some("auth_init") {
+                if let Some(pubkey) = value.get("pubkey").and_then(|v| v.as_str()) {
+                    client_pubkey_str = pubkey.to_string();
+                }
+            }
+        }
+    }
+
+    if client_pubkey_str.is_empty() { return; }
+
+    // Decode client pubkey
+    let client_pub_bytes = match BASE64_STANDARD.decode(&client_pubkey_str) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let client_pub_point = match EncodedPoint::from_bytes(&client_pub_bytes) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let client_pub_affine = match PublicKey::from_encoded_point(&client_pub_point) {
+        Some(p) => p,
+        None => return,
+    };
+
+    // 2. Generate ephemeral key & challenge
+    let server_secret = SecretKey::random(&mut OsRng);
+    let server_public = server_secret.public_key();
+    let encoded_point = server_public.to_encoded_point(false);
+    let server_pub_b64 = BASE64_STANDARD.encode(encoded_point.as_bytes());
+
+    let mut challenge_bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut challenge_bytes);
+    let challenge_b64 = BASE64_STANDARD.encode(challenge_bytes);
+
+    let shared_secret = p256::ecdh::diffie_hellman(server_secret.to_nonzero_scalar(), client_pub_affine.as_affine());
+    let shared_bytes = shared_secret.raw_secret_bytes(); // 32 bytes
+
+    // Send challenge
+    let msg = format!(r#"{{"type":"auth_challenge", "ephemeral_pubkey":"{}", "challenge":"{}"}}"#, server_pub_b64, challenge_b64);
+    if socket.send(Message::Text(msg.into())).await.is_err() { return; }
+
+    // 3. Wait for auth_verify
+    let mut authenticated = false;
+    if let Some(Ok(Message::Text(text))) = socket.recv().await {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+            if value.get("type").and_then(|v| v.as_str()) == Some("auth_verify") {
+                if let Some(encrypted_b64) = value.get("encrypted_challenge").and_then(|v| v.as_str()) {
+                    if let Ok(combined) = BASE64_STANDARD.decode(encrypted_b64) {
+                        if combined.len() >= 12 {
+                            let (iv, cipher) = combined.split_at(12);
+                            let key = aes_gcm::Key::<Aes256Gcm>::from_slice(shared_bytes.as_slice());
+                            let cipher_algo = Aes256Gcm::new(key);
+                            let nonce = Nonce::from_slice(iv);
+                            if let Ok(plaintext) = cipher_algo.decrypt(nonce, cipher) {
+                                if plaintext == challenge_bytes {
+                                    authenticated = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !authenticated { return; }
+
     // ponytail: send entire history on connect. no REST endpoints, no CORS needed.
     let records: Result<Vec<(String, String, String)>, _> = sqlx::query_as("SELECT sender_pubkey, receiver_pubkey, encrypted_payload FROM messages ORDER BY id ASC")
         .fetch_all(&state.pool)
@@ -92,7 +171,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         
     if let Ok(rows) = records {
         for (sender, receiver, payload) in rows {
-            let env = Envelope { sender, receiver, payload };
+            let env = Envelope { r#type: None, sender, receiver, payload };
             if let Ok(json) = serde_json::to_string(&env) {
                 let _ = socket.send(Message::Text(json.into())).await;
             }
