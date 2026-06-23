@@ -1,4 +1,4 @@
-import { Component, signal, effect } from '@angular/core';
+import { Component, signal, effect, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
@@ -69,7 +69,7 @@ import { FormsModule } from '@angular/forms';
           </div>
           
           <div class="messages">
-            <div class="message" *ngFor="let msg of getActiveMessages()">
+            <div class="message" *ngFor="let msg of activeMessages()">
               <div class="bubble" [class.self]="msg.isSelf">
                 {{ msg.text }}
               </div>
@@ -188,19 +188,33 @@ export class AppComponent {
   
   private ws: WebSocket | null = null;
 
+  // Reactively derive messages for the current chat window
+  activeMessages = computed(() => {
+    const contact = this.activeContact();
+    if (!contact) return [];
+    return this.allMessages()[contact] || [];
+  });
+
   constructor() {
     this.restoreSession();
   }
 
   // --- Session Persistence (Local Storage) ---
-  // ponytail: we use localStorage instead of cookies. 
-  // Cookies are sent to the server on every request. Zero Trust = server never sees the key.
   private async restoreSession() {
     const savedJwk = localStorage.getItem('telegram_e2ee_private_key');
     if (savedJwk) {
       try {
         const jwk = JSON.parse(savedJwk);
         await this.loadKeypairFromJwk(jwk);
+        
+        // Restore local contacts
+        const savedContacts = localStorage.getItem('telegram_e2ee_contacts');
+        if (savedContacts) {
+          const pubKeys: string[] = JSON.parse(savedContacts);
+          for (const pubKey of pubKeys) {
+            await this.addContactPubKey(pubKey);
+          }
+        }
       } catch (e) {
         console.error("Failed to restore session", e);
       }
@@ -213,8 +227,6 @@ export class AppComponent {
       'jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']
     );
     
-    // Web Crypto API doesn't allow exporting the public key from a private key directly.
-    // So we reconstruct the public JWK by stripping the private part ('d')
     const pubJwk = { ...jwk, d: undefined, key_ops: [] };
     const publicKey = await crypto.subtle.importKey(
       'jwk', pubJwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []
@@ -239,6 +251,9 @@ export class AppComponent {
     
     this.myJwkPrivate = await crypto.subtle.exportKey('jwk', this.myKeyPair.privateKey);
     localStorage.setItem('telegram_e2ee_private_key', JSON.stringify(this.myJwkPrivate));
+    localStorage.removeItem('telegram_e2ee_contacts');
+    this.contacts.set([]);
+    this.allMessages.set({});
     
     this.isReady.set(true);
     this.connectWs();
@@ -268,8 +283,16 @@ export class AppComponent {
   // --- Contacts & Messaging ---
   async addContact() {
     if (!this.newContactKey.trim()) return;
+    await this.addContactPubKey(this.newContactKey.trim());
+    this.newContactKey = '';
+  }
+  
+  private async addContactPubKey(pubKeyBase64: string) {
+    if (this.contacts().some(c => c.pubKey === pubKeyBase64)) return;
+    if (pubKeyBase64 === this.myPublicKeyBase64) return; // don't add self
+    
     try {
-      const pubKeyBuffer = this.base64ToArrayBuffer(this.newContactKey.trim());
+      const pubKeyBuffer = this.base64ToArrayBuffer(pubKeyBase64);
       const contactPubKey = await crypto.subtle.importKey(
         'raw', pubKeyBuffer, { name: 'ECDH', namedCurve: 'P-256' }, true, []
       );
@@ -282,20 +305,18 @@ export class AppComponent {
         ['encrypt', 'decrypt']
       );
 
-      this.contacts.update(c => [...c, { pubKey: this.newContactKey.trim(), sharedKey }]);
-      this.newContactKey = '';
+      this.contacts.update(c => {
+        const updated = [...c, { pubKey: pubKeyBase64, sharedKey }];
+        localStorage.setItem('telegram_e2ee_contacts', JSON.stringify(updated.map(u => u.pubKey)));
+        return updated;
+      });
+      
       if (!this.activeContact()) {
-        this.activeContact.set(this.contacts()[0].pubKey);
+        this.activeContact.set(pubKeyBase64);
       }
     } catch (e) {
-      alert("Invalid public key format.");
+      console.warn("Invalid public key format for contact", pubKeyBase64);
     }
-  }
-
-  getActiveMessages() {
-    const contact = this.activeContact();
-    if (!contact) return [];
-    return this.allMessages()[contact] || [];
   }
 
   private connectWs() {
@@ -304,24 +325,27 @@ export class AppComponent {
       try {
         const msg = JSON.parse(event.data);
         
-        // ponytail: prevent the "double message" bug by ignoring our own echoes
-        if (msg.sender === this.myPublicKeyBase64) return;
-        
-        // Check if the message is actually meant for us
-        if (msg.receiver !== this.myPublicKeyBase64) return;
-
-        const contact = this.contacts().find(c => c.pubKey === msg.sender);
-        if (contact) {
-          const decrypted = await this.decrypt(msg.payload, contact.sharedKey);
-          if (decrypted) {
-            this.addMessageToState(contact.pubKey, decrypted, false);
+        // Auto-reconstruct address book from the database history!
+        // If we see a message sent by us or meant for us, ensure the other party is in our contacts.
+        if (msg.sender === this.myPublicKeyBase64) {
+          await this.addContactPubKey(msg.receiver);
+          const contact = this.contacts().find(c => c.pubKey === msg.receiver);
+          if (contact) {
+            const decrypted = await this.decrypt(msg.payload, contact.sharedKey);
+            if (decrypted) this.addMessageToState(contact.pubKey, decrypted, true);
           }
-        } else {
-          console.warn("Received message from unknown contact:", msg.sender);
+          return;
         }
-      } catch (e) {
-        // Not a JSON message or decryption failed
-      }
+        
+        if (msg.receiver === this.myPublicKeyBase64) {
+          await this.addContactPubKey(msg.sender);
+          const contact = this.contacts().find(c => c.pubKey === msg.sender);
+          if (contact) {
+            const decrypted = await this.decrypt(msg.payload, contact.sharedKey);
+            if (decrypted) this.addMessageToState(contact.pubKey, decrypted, false);
+          }
+        }
+      } catch (e) {}
     };
   }
 
@@ -335,11 +359,11 @@ export class AppComponent {
     const contact = this.contacts().find(c => c.pubKey === active);
     if (!contact) return;
 
-    this.addMessageToState(active, text, true);
-    
     const encrypted = await this.encrypt(text, contact.sharedKey);
     
-    // Send with an envelope so the server/clients know who it's routing to/from
+    // We send to the server. We will NOT add it locally! 
+    // We rely 100% on the server echoing it back (or returning history) to add it to the UI.
+    // This perfectly proves it was saved in the Postgres DB!
     const envelope = {
       sender: this.myPublicKeyBase64,
       receiver: active,
@@ -351,6 +375,8 @@ export class AppComponent {
   private addMessageToState(contactPubKey: string, text: string, isSelf: boolean) {
     this.allMessages.update(state => {
       const current = state[contactPubKey] || [];
+      // deduplicate in case of reconnects pumping history
+      if (current.some(m => m.text === text && m.isSelf === isSelf)) return state;
       return { ...state, [contactPubKey]: [...current, { text, isSelf }] };
     });
   }

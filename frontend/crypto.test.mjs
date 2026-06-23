@@ -18,9 +18,9 @@ function base64ToArrayBuffer(base64) {
 }
 
 async function encrypt(text, key) {
-  const iv = getRandomValues(new Uint8Array(12));
+  const iv = webcrypto.getRandomValues(new Uint8Array(12));
   const enc = new TextEncoder();
-  const cipher = await subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
+  const cipher = await webcrypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(text));
   const combined = new Uint8Array(iv.length + cipher.byteLength);
   combined.set(iv);
   combined.set(new Uint8Array(cipher), iv.length);
