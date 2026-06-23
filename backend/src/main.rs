@@ -41,7 +41,17 @@ async fn main() {
     )
     .execute(&pool)
     .await
-    .expect("Failed to initialize database schema");
+    .expect("Failed to initialize messages schema");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS users (
+            pubkey TEXT PRIMARY KEY,
+            pseudo TEXT NOT NULL
+        );"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to initialize users schema");
 
     // ponytail: blind broadcast channel. zero trust means the server doesn't care who gets what, 
     // only the true receiver can decrypt it anyway.
@@ -89,6 +99,18 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
     }
 
+    // Also send all known pseudos
+    let users_records: Result<Vec<(String, String)>, _> = sqlx::query_as("SELECT pubkey, pseudo FROM users")
+        .fetch_all(&state.pool)
+        .await;
+        
+    if let Ok(rows) = users_records {
+        for (pubkey, pseudo) in rows {
+            let json = format!(r#"{{"type":"pseudo","pubkey":"{}","pseudo":"{}"}}"#, pubkey, pseudo);
+            let _ = socket.send(Message::Text(json.into())).await;
+        }
+    }
+
     let mut rx = state.tx.subscribe();
     
     // ponytail: simple select loop to handle send/recv concurrently
@@ -103,15 +125,26 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             }
             msg = socket.recv() => {
                 if let Some(Ok(Message::Text(text))) = msg {
-                    if let Ok(env) = serde_json::from_str::<Envelope>(&text) {
-                        let _ = sqlx::query("INSERT INTO messages (sender_pubkey, receiver_pubkey, encrypted_payload) VALUES ($1, $2, $3)")
-                            .bind(&env.sender)
-                            .bind(&env.receiver)
-                            .bind(&env.payload)
-                            .execute(&state.pool)
-                            .await;
-                        
-                        let _ = state.tx.send(text.to_string());
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if value.get("type").and_then(|v| v.as_str()) == Some("pseudo") {
+                            if let (Some(pubkey), Some(pseudo)) = (value.get("pubkey").and_then(|v| v.as_str()), value.get("pseudo").and_then(|v| v.as_str())) {
+                                let _ = sqlx::query("INSERT INTO users (pubkey, pseudo) VALUES ($1, $2) ON CONFLICT (pubkey) DO UPDATE SET pseudo = EXCLUDED.pseudo")
+                                    .bind(pubkey)
+                                    .bind(pseudo)
+                                    .execute(&state.pool)
+                                    .await;
+                                let _ = state.tx.send(text.to_string());
+                            }
+                        } else if let Ok(env) = serde_json::from_str::<Envelope>(&text) {
+                            let _ = sqlx::query("INSERT INTO messages (sender_pubkey, receiver_pubkey, encrypted_payload) VALUES ($1, $2, $3)")
+                                .bind(&env.sender)
+                                .bind(&env.receiver)
+                                .bind(&env.payload)
+                                .execute(&state.pool)
+                                .await;
+                            
+                            let _ = state.tx.send(text.to_string());
+                        }
                     }
                 } else {
                     break;
