@@ -40,6 +40,13 @@ import { ChatService } from '../services/chat.service';
           👤 {{ chat.getPseudo(contact.pubKey) }}
         </div>
       </div>
+
+      <!-- ponytail: simple standard links, no complex router or abstractions -->
+      <div class="security-links" style="margin-top: auto; padding-top: 15px; border-top: 1px solid #333; font-size: 0.8em;">
+        <h4 style="margin: 0 0 5px 0; color: #aaa;">Security</h4>
+        <a href="https://github.com/Strange500/telegram-rs" target="_blank" style="color: #4ade80; display: block; margin-bottom: 3px;">🔗 Open Source Repository</a>
+        <a href="#" style="color: #4ade80; display: block;">🛡️ Third-Party Audit Report</a>
+      </div>
     </div>
   `
 })
